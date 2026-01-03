@@ -1,68 +1,29 @@
-// ⚠️ TEMPORÄR – später durch Login / Session ersetzen
-const USER_ID = 1;
-
-// 1️⃣ Geplante Spiele laden
-async function ladeGeplanteSpiele() {
-    const res = await fetch("/api/spiele");
-    const spiele = await res.json();
-
-    const select = document.getElementById("spielSelect");
-    select.innerHTML = '<option value="">Bitte wählen …</option>';
-
-    spiele
-        .filter(spiel => spiel.statuswort === "geplant")
-        .forEach(spiel => {
-            const opt = document.createElement("option");
-            opt.value = spiel.id;
-            opt.textContent =
-                `${spiel.heimverein} – ${spiel.gastverein} (${spiel.anstoss})`;
-            select.appendChild(opt);
-        });
-}
-
-// 2️⃣ Tipp speichern
-document.getElementById("btnTippen").addEventListener("click", async () => {
-    const spiel_id = document.getElementById("spielSelect").value;
-    const heimtipp = document.getElementById("heimtipp").value;
-    const gasttipp = document.getElementById("gasttipp").value;
-
-    if (!spiel_id) {
-        return zeigeMeldung("Bitte ein Spiel auswählen", "red");
-    }
-
-    if (heimtipp === "" || gasttipp === "") {
-        return zeigeMeldung("Bitte beide Tipps eingeben", "red");
-    }
-
+document.addEventListener("DOMContentLoaded", async () => {
     try {
-        const res = await fetch("/api/tips", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                user_id: USER_ID,
-                spiel_id: Number(spiel_id),
-                heimtipp: Number(heimtipp),
-                gasttipp: Number(gasttipp)
-            })
+        await checkSession(); // nur Login nötig
+
+        const res = await fetch("/api/spiele", {
+            credentials: "include"
         });
 
-        const data = await res.json();
+        if (!res.ok) throw new Error("Spiele konnten nicht geladen werden");
 
-        if (!res.ok) throw new Error(data.error);
+        const spiele = await res.json();
 
-        zeigeMeldung("Tipp gespeichert ✔", "green");
+        const geplant = spiele.filter(s => s.statuswort === "geplant");
+        const container = document.getElementById("spiele");
+        container.innerHTML = "";
+
+        geplant.forEach(s => {
+            const div = document.createElement("div");
+            div.innerHTML = `
+                <b>${s.heimverein} – ${s.gastverein}</b><br>
+                Anstoß: ${new Date(s.anstoss).toLocaleString()}
+            `;
+            container.appendChild(div);
+        });
 
     } catch (err) {
-        zeigeMeldung(err.message, "red");
+        console.error("Tippen Fehler:", err);
     }
 });
-
-// 3️⃣ Meldungen anzeigen
-function zeigeMeldung(text, farbe) {
-    const el = document.getElementById("meldung");
-    el.textContent = text;
-    el.style.color = farbe;
-}
-
-// Start
-ladeGeplanteSpiele();

@@ -5,6 +5,8 @@ if (process.env.NODE_ENV !== "production") {
     require("dotenv").config();
 }
 
+console.log("ENV CHECK:", process.env.DATABASE_URL);
+
 // ===============================
 // Imports
 // ===============================
@@ -45,7 +47,7 @@ app.use(session({
 }));
 
 // ===============================
-// Auth Middleware
+// Auth Middleware (NUR API)
 // ===============================
 function requireLogin(req, res, next) {
     if (!req.session.user) {
@@ -54,8 +56,15 @@ function requireLogin(req, res, next) {
     next();
 }
 
+function requireAdmin(req, res, next) {
+    if (!req.session.user || req.session.user.role !== "admin") {
+        return res.status(403).json({ error: "Nur Admin" });
+    }
+    next();
+}
+
 function requireTipper(req, res, next) {
-    if (req.session.user.role !== "tipper") {
+    if (!req.session.user || req.session.user.role !== "tipper") {
         return res.status(403).json({ error: "Nur Tipper erlaubt" });
     }
     next();
@@ -74,13 +83,11 @@ const pool = new pg.Pool({
 });
 
 pool.connect()
-    .then(client => {
-        client.release();
+    .then(c => {
+        c.release();
         console.log("PostgreSQL verbunden");
     })
-    .catch(err => {
-        console.error("DB Fehler:", err);
-    });
+    .catch(err => console.error("DB Fehler:", err));
 
 // ===============================
 // Cron Jobs
@@ -99,9 +106,9 @@ cron.schedule("* * * * *", async () => {
             SET statuswort = 'beendet'
             WHERE statuswort = 'live'
               AND anstoss
-                  + INTERVAL '${SPIELZEIT_MINUTEN} minutes'
-                  + INTERVAL '${NACHSPIELZEIT_MINUTEN} minutes'
-                  <= NOW()
+                + INTERVAL '${SPIELZEIT_MINUTEN} minutes'
+                + INTERVAL '${NACHSPIELZEIT_MINUTEN} minutes'
+                <= NOW()
         `);
     } catch (err) {
         console.error("Cron Fehler:", err);
@@ -109,7 +116,22 @@ cron.schedule("* * * * *", async () => {
 });
 
 // ===============================
-// Auth Routen
+// HTML Seiten (OHNE Auth)
+// ===============================
+app.get("/", (req, res) => {
+    res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+app.get("/admin", (req, res) => {
+    res.sendFile(path.join(__dirname, "public", "admin_dashboard.html"));
+});
+
+app.get("/tippen.html", (req, res) => {
+    res.sendFile(path.join(__dirname, "public", "tippen.html"));
+});
+
+// ===============================
+// Session / Auth API
 // ===============================
 app.post("/api/login", async (req, res) => {
     const { name, password } = req.body;
@@ -137,159 +159,217 @@ app.post("/api/login", async (req, res) => {
             role: user.role
         };
 
-        res.json({ message: "Login erfolgreich" });
+        res.json({ role: user.role });
 
     } catch (err) {
         res.status(500).json({ error: "Login-Fehler" });
     }
 });
 
-
 app.post("/api/logout", (req, res) => {
-    req.session.destroy(() => {
-        res.json({ message: "Logout erfolgreich" });
-    });
+    req.session.destroy(() => res.json({ message: "Logout ok" }));
 });
 
-// ===============================
-// Tipps
-// ===============================
-app.get("/api/tips", async (req, res) => {
-    try {
-        const result = await pool.query(`
-            SELECT
-                t.id AS tip_id,
-                t.heimtipp,
-                t.gasttipp,
-                u.name AS user_name,
-                s.heimverein,
-                s.gastverein,
-                s.anstoss,
-                s.statuswort
-            FROM tips t
-            JOIN users u ON u.id = t.user_id
-            JOIN spiele s ON s.id = t.spiel_id
-            ORDER BY s.anstoss, u.name
-        `);
-
-        res.json(result.rows);
-    } catch (err) {
-        res.status(500).json({ error: "Fehler beim Laden der Tipps" });
-    }
+app.get("/api/session", (req, res) => {
+    res.json({ user: req.session.user || null });
 });
 
-app.post("/api/tips", requireLogin, requireTipper, async (req, res) => {
-    const { spiel_id, heimtipp, gasttipp } = req.body;
-    const user_id = req.session.user.id;
-
-    if (
-        spiel_id === undefined ||
-        heimtipp === undefined ||
-        gasttipp === undefined
-    ) {
-        return res.status(400).json({ error: "Unvollständige Daten" });
-    }
-
-    try {
-        const spiel = await pool.query(
-            "SELECT statuswort FROM spiele WHERE id = $1",
-            [spiel_id]
-        );
-
-        if (
-            spiel.rowCount === 0 ||
-            spiel.rows[0].statuswort !== "geplant"
-        ) {
-            return res.status(403).json({ error: "Tippen nicht erlaubt" });
-        }
-
-        const tip = await pool.query(`
-            INSERT INTO tips (user_id, spiel_id, heimtipp, gasttipp)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (user_id, spiel_id)
-            DO UPDATE SET
-                heimtipp = EXCLUDED.heimtipp,
-                gasttipp = EXCLUDED.gasttipp,
-                created_at = NOW()
-            RETURNING *
-        `, [user_id, spiel_id, heimtipp, gasttipp]);
-
-        res.json(tip.rows[0]);
-
-    } catch (err) {
-        res.status(500).json({ error: "Fehler beim Speichern" });
-    }
-});
 
 // ===============================
-// Spiele
+// Zeiten API
 // ===============================
-app.get("/api/spiele", async (req, res) => {
+app.get("/api/zeiten", requireLogin, async (req, res) => {
     try {
         const result = await pool.query(
-            "SELECT * FROM spiele ORDER BY anstoss"
+            "SELECT id, zeit FROM zeiten ORDER BY zeit"
         );
         res.json(result.rows);
     } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Zeiten laden fehlgeschlagen" });
+    }
+});
+
+app.post("/api/zeiten", requireAdmin, async (req, res) => {
+    const { zeit } = req.body;
+
+    try {
+        const result = await pool.query(
+            "INSERT INTO zeiten (zeit) VALUES ($1) RETURNING *",
+            [zeit]
+        );
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Zeit speichern fehlgeschlagen" });
+    }
+});
+
+app.delete("/api/zeiten/:id", requireAdmin, async (req, res) => {
+    try {
+        await pool.query("DELETE FROM zeiten WHERE id=$1", [req.params.id]);
+        res.json({ success: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Zeit löschen fehlgeschlagen" });
+    }
+});
+
+// ===============================
+// Vereine API
+// ===============================
+app.get("/api/vereine", requireLogin, async (req, res) => {
+    try {
+        const result = await pool.query(
+            "SELECT id, vereinsname FROM vereine ORDER BY vereinsname"
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Vereine laden fehlgeschlagen" });
+    }
+});
+
+app.post("/api/vereine", requireAdmin, async (req, res) => {
+    const { vereinsname } = req.body;
+
+    try {
+        const result = await pool.query(
+            "INSERT INTO vereine (vereinsname) VALUES ($1) RETURNING *",
+            [vereinsname]
+        );
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Verein speichern fehlgeschlagen" });
+    }
+});
+
+app.delete("/api/vereine/:id", requireAdmin, async (req, res) => {
+    try {
+        await pool.query("DELETE FROM vereine WHERE id=$1", [req.params.id]);
+        res.json({ success: true });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Verein löschen fehlgeschlagen" });
+    }
+});
+
+
+
+
+
+// ===============================
+// Spiele API
+// ===============================
+app.get("/api/spiele", requireLogin, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT id, anstoss, heimverein, gastverein,
+                    heimtore, gasttore, statuswort
+             FROM spiele
+             ORDER BY anstoss`
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error(err);
         res.status(500).json({ error: "Fehler beim Laden der Spiele" });
     }
 });
 
-app.post("/api/spiele", requireLogin, requireAdmin, async (req, res) => {
+
+app.post("/api/spiele", requireAdmin, async (req, res) => {
     const { anstoss, heimverein, gastverein, heimtore, gasttore, statuswort } = req.body;
 
     try {
-        const result = await pool.query(`
-            INSERT INTO spiele (anstoss, heimverein, gastverein, heimtore, gasttore, statuswort)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING *
-        `, [anstoss, heimverein, gastverein, heimtore, gasttore, statuswort]);
-
+        const result = await pool.query(
+            `INSERT INTO spiele
+             (anstoss, heimverein, gastverein, heimtore, gasttore, statuswort)
+             VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+            [anstoss, heimverein, gastverein, heimtore, gasttore, statuswort]
+        );
         res.json(result.rows[0]);
-    } catch (err) {
-        res.status(500).json({ error: "Fehler beim Anlegen des Spiels" });
+    } catch {
+        res.status(500).json({ error: "Spiel anlegen fehlgeschlagen" });
     }
 });
 
-app.patch("/api/spiele/:id/ergebnis", requireLogin, requireAdmin, async (req, res) => {
-    const { id } = req.params;
-    const { heimtore, gasttore, statuswort } = req.body;
-
-    if (heimtore === undefined || gasttore === undefined) {
-        return res.status(400).json({ error: "Tore fehlen" });
-    }
+app.patch("/api/spiele/:id/ergebnis", requireAdmin, async (req, res) => {
+    const { heimtore, gasttore } = req.body;
 
     try {
-        const result = await pool.query(`
-            UPDATE spiele
-            SET heimtore = $1,
-                gasttore = $2,
-                statuswort = $3
-            WHERE id = $4
-            RETURNING *
-        `, [heimtore, gasttore, statuswort, id]);
-
+        const result = await pool.query(
+            `UPDATE spiele
+             SET heimtore=$1, gasttore=$2
+             WHERE id=$3 RETURNING *`,
+            [heimtore, gasttore, req.params.id]
+        );
         res.json(result.rows[0]);
-    } catch (err) {
-        res.status(500).json({ error: "Fehler beim Update" });
+    } catch {
+        res.status(500).json({ error: "Update fehlgeschlagen" });
     }
 });
-function requireAdmin(req, res, next) {
-    if (!req.session.user || req.session.user.role !== "admin") {
-        return res.status(403).json({ error: "Nur Admin" });
+
+app.delete("/api/spiele/:id", requireAdmin, async (req, res) => {
+    await pool.query("DELETE FROM spiele WHERE id=$1", [req.params.id]);
+    res.json({ success: true });
+});
+
+// ===============================
+// Tipps API
+// ===============================
+app.post("/api/tips", requireLogin, requireTipper, async (req, res) => {
+    const { spiel_id, heimtipp, gasttipp } = req.body;
+
+    try {
+        const spiel = await pool.query(
+            "SELECT statuswort FROM spiele WHERE id=$1",
+            [spiel_id]
+        );
+
+        if (spiel.rows[0]?.statuswort !== "geplant") {
+            return res.status(403).json({ error: "Tippen nicht erlaubt" });
+        }
+
+        const result = await pool.query(`
+            INSERT INTO tips (user_id, spiel_id, heimtipp, gasttipp)
+            VALUES ($1,$2,$3,$4)
+            ON CONFLICT (user_id, spiel_id)
+            DO UPDATE SET heimtipp=$3, gasttipp=$4, created_at=NOW()
+            RETURNING *`,
+            [req.session.user.id, spiel_id, heimtipp, gasttipp]
+        );
+
+        res.json(result.rows[0]);
+    } catch {
+        res.status(500).json({ error: "Tipp fehlgeschlagen" });
     }
-    next();
-}
+});
 
 
+// ===============================
+// User API (Admin)
+// ===============================
+app.get("/api/users", requireAdmin, async (req, res) => {
+    const result = await pool.query(
+        "SELECT id, name, role FROM users ORDER BY name"
+    );
+    res.json(result.rows);
+});
 
-app.post("/api/users", requireLogin, requireAdmin, async (req, res) => {
+app.post("/api/users", requireAdmin, async (req, res) => {
     const { name, password, role } = req.body;
+
+    console.log("👤 NEW USER:", req.body); // ← WICHTIG
+
+    if (!name || !password || !role) {
+        return res.status(400).json({ error: "Daten fehlen" });
+    }
 
     const hash = await bcrypt.hash(password, 10);
 
     const result = await pool.query(
-        "INSERT INTO users (name, password, role) VALUES ($1, $2, $3) RETURNING id, name, role",
+        "INSERT INTO users (name, password, role) VALUES ($1,$2,$3) RETURNING id,name,role",
         [name, hash, role]
     );
 
@@ -297,12 +377,11 @@ app.post("/api/users", requireLogin, requireAdmin, async (req, res) => {
 });
 
 
-// ===============================
-// Static
-// ===============================
-app.get("/", (req, res) => {
-    res.sendFile(path.join(__dirname, "public", "index.html"));
+app.delete("/api/users/:id", requireAdmin, async (req, res) => {
+    await pool.query("DELETE FROM users WHERE id=$1", [req.params.id]);
+    res.json({ success: true });
 });
+
 
 // ===============================
 // Start
