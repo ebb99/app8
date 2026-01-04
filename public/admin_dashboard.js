@@ -62,9 +62,6 @@ function $(id) {
 // ===============================
 // Zeiten
 // ===============================
-function $(id) {
-    return document.getElementById(id);
-}
 
 async function ladeZeiten() {
     console.log("⏳ ladeZeiten()");
@@ -292,35 +289,30 @@ async function ladeUser() {
     }
 }
 
-// ===============================
-// Neuer Benutzer
-// ===============================
-document.getElementById("userForm").addEventListener("submit", async e => {
+async function userAnlegen(e) {
     e.preventDefault();
 
-    const name = document.getElementById("userName").value;
-    const password = document.getElementById("userPassword").value;
-    const role = document.getElementById("userRole").value;
+    const name = $("userName").value.trim();
+    const password = $("userPassword").value;
+    const role = $("userRole").value;
+
+    if (!name || !password) {
+        return alert("Name und Passwort erforderlich");
+    }
 
     const res = await fetch("/api/users", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, password, role })
     });
 
     if (!res.ok) {
-        alert("Benutzer anlegen fehlgeschlagen");
+        const t = await res.text();
+        alert("Fehler: " + t);
         return;
     }
 
-    document.getElementById("userForm").reset();
+    $("userForm").reset();
     ladeUser();
-});
-
-// ===============================
-// Initial
-// ===============================
-document.addEventListener("DOMContentLoaded", () => {
-    ladeUser();
-});
+}

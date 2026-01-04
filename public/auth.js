@@ -1,19 +1,22 @@
 async function checkSession(requiredRole = null) {
-    const res = await fetch("/api/me", {
+    const res = await fetch("/api/session", {
         credentials: "include"
     });
 
     if (!res.ok) {
-        window.location.href = "/";
+        throw new Error("Session-Fehler");
+    }
+
+    const data = await res.json();
+
+    if (!data.user) {
         throw new Error("Nicht eingeloggt");
     }
 
-    const user = await res.json();
-
-    if (requiredRole && user.role !== requiredRole) {
-        window.location.href = "/";
+    if (requiredRole && data.user.role !== requiredRole) {
         throw new Error("Keine Berechtigung");
     }
 
-    return user;
+    return data.user;
 }
+
