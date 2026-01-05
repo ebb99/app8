@@ -115,6 +115,65 @@ cron.schedule("* * * * *", async () => {
     }
 });
 
+function berechnePunkte(tipp, spiel) {
+    if (tipp.heimtipp === spiel.heimtore &&
+        tipp.gasttipp === spiel.gasttore) {
+        return 3;
+    }
+
+    const tippDiff = tipp.heimtipp - tipp.gasttipp;
+    const spielDiff = spiel.heimtore - spiel.gasttore;
+
+    if (
+        (tippDiff > 0 && spielDiff > 0) ||
+        (tippDiff < 0 && spielDiff < 0) ||
+        (tippDiff === 0 && spielDiff === 0)
+    ) {
+        return 1;
+    }
+
+    return 0;
+}
+
+async function werteSpielAus(spielId) {
+    const spielRes = await pool.query(
+        "SELECT * FROM spiele WHERE id=$1",
+        [spielId]
+    );
+    const spiel = spielRes.rows[0];
+
+    const tipsRes = await pool.query(
+        "SELECT * FROM tips WHERE spiel_id=$1",
+        [spielId]
+    );
+
+    for (const tipp of tipsRes.rows) {
+        const punkte = berechnePunkte(tipp, spiel);
+
+        await pool.query(
+            "UPDATE tips SET punkte=$1 WHERE id=$2",
+            [punkte, tipp.id]
+        );
+    }
+
+    await pool.query(
+        "UPDATE spiele SET statuswort='ausgewertet' WHERE id=$1",
+        [spielId]
+    );
+}
+app.get("/api/rangliste", requireLogin, async (req, res) => {
+    const result = await pool.query(`
+        SELECT u.name, SUM(t.punkte) AS punkte
+        FROM users u
+        JOIN tips t ON t.user_id = u.id
+        GROUP BY u.id
+        ORDER BY punkte DESC
+    `);
+
+    res.json(result.rows);
+});
+
+
 // ===============================
 // HTML Seiten (OHNE Auth)
 // ===============================
@@ -322,28 +381,90 @@ app.post("/api/tips", requireLogin, requireTipper, async (req, res) => {
     const { spiel_id, heimtipp, gasttipp } = req.body;
 
     try {
-        const spiel = await pool.query(
-            "SELECT statuswort FROM spiele WHERE id=$1",
+        // Spiel laden
+        const spielRes = await pool.query(
+            "SELECT anstoss, statuswort FROM spiele WHERE id=$1",
             [spiel_id]
         );
 
-        if (spiel.rows[0]?.statuswort !== "geplant") {
-            return res.status(403).json({ error: "Tippen nicht erlaubt" });
+        if (spielRes.rowCount === 0) {
+            return res.status(404).json({ error: "Spiel nicht gefunden" });
         }
 
+        const spiel = spielRes.rows[0];
+
+        // Status prüfen
+        if (spiel.statuswort !== "geplant") {
+            return res.status(403).json({ error: "Spiel nicht mehr tippbar" });
+        }
+
+        // Zeitfenster prüfen
+        if (new Date(spiel.anstoss) <= new Date()) {
+            return res.status(403).json({ error: "Anstoßzeit überschritten" });
+        }
+
+        // Tipp speichern / überschreiben
         const result = await pool.query(`
             INSERT INTO tips (user_id, spiel_id, heimtipp, gasttipp)
             VALUES ($1,$2,$3,$4)
             ON CONFLICT (user_id, spiel_id)
-            DO UPDATE SET heimtipp=$3, gasttipp=$4, created_at=NOW()
+            DO UPDATE SET
+                heimtipp=$3,
+                gasttipp=$4,
+                updated_at=NOW()
             RETURNING *`,
             [req.session.user.id, spiel_id, heimtipp, gasttipp]
         );
 
         res.json(result.rows[0]);
-    } catch {
-        res.status(500).json({ error: "Tipp fehlgeschlagen" });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Tippen fehlgeschlagen" });
     }
+});
+
+// ===============================
+// Tipps anzeigen (für Dashboard)
+// ===============================
+app.get("/api/tips", requireLogin, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT
+                t.id,
+                t.spiel_id,
+                t.heimtipp,
+                t.gasttipp,
+                u.name AS user_name,
+                s.heimverein,
+                s.gastverein,
+                s.anstoss,
+                s.statuswort
+            FROM tips t
+            JOIN users u ON u.id = t.user_id
+            JOIN spiele s ON s.id = t.spiel_id
+            ORDER BY s.anstoss, u.name
+        `);
+
+        res.json(result.rows);
+    } catch (err) {
+        console.error("❌ GET /api/tips:", err);
+        res.status(500).json({ error: "Tipps laden fehlgeschlagen" });
+    }
+});
+
+
+app.get("/api/rangliste", requireLogin, async (req, res) => {
+    const result = await pool.query(`
+        SELECT u.name, COALESCE(SUM(t.punkte),0) AS punkte
+        FROM users u
+        LEFT JOIN tips t ON t.user_id = u.id
+        WHERE u.role = 'tipper'
+        GROUP BY u.id
+        ORDER BY punkte DESC, u.name
+    `);
+
+    res.json(result.rows);
 });
 
 
