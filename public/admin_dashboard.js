@@ -218,7 +218,7 @@ async function spielSpeichern() {
 async function spielLoeschen() {
     const id = $("spieleSelect").value;
     if (!id) return;
-
+    console.log("Lösche Spiel mit ID:", id);
     await api(`/api/spiele/${id}`, { method: "DELETE" });
     ladeSpiele();
 }
