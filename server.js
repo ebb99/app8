@@ -115,6 +115,7 @@ cron.schedule("* * * * *", async () => {
     }
 });
 
+
 function berechnePunkte(tipp, spiel) {
     if (tipp.heimtipp === spiel.heimtore &&
         tipp.gasttipp === spiel.gasttore) {
@@ -163,13 +164,12 @@ async function werteSpielAus(spielId) {
 }
 app.get("/api/rangliste", requireLogin, async (req, res) => {
     const result = await pool.query(`
-        SELECT u.name, SUM(t.punkte) AS punkte
-        FROM users u
-        JOIN tips t ON t.user_id = u.id
-        GROUP BY u.id
-        ORDER BY punkte DESC
+    SELECT u.name, COALESCE(SUM(t.punkte),0) AS punkte
+    FROM users u
+    LEFT JOIN tips t ON u.id = t.user_id
+    GROUP BY u.id
+    ORDER BY punkte DESC
     `);
-
     res.json(result.rows);
 });
 
@@ -355,19 +355,33 @@ app.post("/api/spiele", requireAdmin, async (req, res) => {
 
 app.patch("/api/spiele/:id/ergebnis", requireAdmin, async (req, res) => {
     const { heimtore, gasttore } = req.body;
+    const spielId = req.params.id;
 
     try {
         const result = await pool.query(
-            `UPDATE spiele
-             SET heimtore=$1, gasttore=$2
-             WHERE id=$3 RETURNING *`,
-            [heimtore, gasttore, req.params.id]
+            `
+            UPDATE spiele
+            SET heimtore = $1,
+                gasttore = $2,
+                statuswort = 'ausgewertet'
+            WHERE id = $3
+            RETURNING *
+            `,
+            [heimtore, gasttore, spielId]
         );
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: "Spiel nicht gefunden" });
+        }
+
         res.json(result.rows[0]);
-    } catch {
-        res.status(500).json({ error: "Update fehlgeschlagen" });
+
+    } catch (err) {
+        console.error("❌ Ergebnis-Update Fehler:", err);
+        res.status(500).json({ error: "Ergebnis speichern fehlgeschlagen" });
     }
 });
+
 
 app.delete("/api/spiele/:id", requireAdmin, async (req, res) => {
     await pool.query("DELETE FROM spiele WHERE id=$1", [req.params.id]);
@@ -502,6 +516,108 @@ app.delete("/api/users/:id", requireAdmin, async (req, res) => {
     await pool.query("DELETE FROM users WHERE id=$1", [req.params.id]);
     res.json({ success: true });
 });
+
+// ===============================
+// Ergebnis eintragen & auswerten
+// ===============================
+app.patch(
+  "/api/spiele/:id/ergebnis",
+  requireLogin,
+  requireAdmin,
+  async (req, res) => {
+    const spielId = req.params.id;
+    const { heimtore, gasttore } = req.body;
+
+    if (
+      heimtore === undefined ||
+      gasttore === undefined
+    ) {
+      return res.status(400).json({ error: "Ergebnis fehlt" });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      // 1️⃣ Spiel prüfen
+      const spielRes = await client.query(
+        "SELECT * FROM spiele WHERE id = $1",
+        [spielId]
+      );
+
+      if (spielRes.rowCount === 0) {
+        throw new Error("Spiel nicht gefunden");
+      }
+
+      const spiel = spielRes.rows[0];
+
+      if (spiel.statuswort === "beendet") {
+        throw new Error("Spiel bereits ausgewertet");
+      }
+
+      // 2️⃣ Spiel aktualisieren
+      await client.query(
+        `
+        UPDATE spiele
+        SET heimtore = $1,
+            gasttore = $2,
+            statuswort = 'beendet'
+        WHERE id = $3
+        `,
+        [heimtore, gasttore, spielId]
+      );
+
+      // 3️⃣ Tipps laden
+      const tipsRes = await client.query(
+        "SELECT * FROM tips WHERE spiel_id = $1",
+        [spielId]
+      );
+
+      // 4️⃣ Punkte berechnen
+      for (const tipp of tipsRes.rows) {
+        let punkte = 0;
+
+        // exakt
+        if (
+          tipp.heimtipp === heimtore &&
+          tipp.gasttipp === gasttore
+        ) {
+          punkte = 3;
+        }
+        // richtige Tendenz
+        else if (
+          (tipp.heimtipp - tipp.gasttipp) *
+          (heimtore - gasttore) > 0
+        ) {
+          punkte = 1;
+        }
+
+        await client.query(
+          "UPDATE tips SET punkte = $1 WHERE id = $2",
+          [punkte, tipp.id]
+        );
+      }
+
+      await client.query("COMMIT");
+
+      res.json({
+        success: true,
+        message: "Ergebnis gespeichert & Punkte berechnet",
+        ausgewerteteTipps: tipsRes.rowCount
+      });
+
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error("❌ Ergebnis-Auswertung:", err);
+      res.status(400).json({ error: err.message });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+
 
 
 // ===============================

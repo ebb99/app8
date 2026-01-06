@@ -224,20 +224,63 @@ async function spielLoeschen() {
 }
 
 async function ergebnisSpeichern() {
-    const id = $("spieleSelect").value;
-    if (!id) return;
+    console.log("🟡 ergebnisSpeichern()");
 
-    await api(`/api/spiele/${id}/ergebnis`, {
-        method: "PATCH",
-        body: JSON.stringify({
-            heimtore: Number($("heimtore").value),
-            gasttore: Number($("gasttore").value),
-            statuswort: "ausgewertet"
-        })
-    });
+    const spielId = document.getElementById("spieleSelect")?.value;
+    const heim = document.getElementById("heimtoreInput")?.value;
+    const gast = document.getElementById("gasttoreInput")?.value;
 
-    ladeSpiele();
+    console.log("📤 Werte:", { spielId, heim, gast });
+
+    if (!spielId) {
+        alert("❌ Kein Spiel gewählt");
+        return;
+    }
+
+    if (heim === "" || gast === "") {
+        alert("❌ Tore fehlen");
+        return;
+    }
+
+    const heimtore = Number(heim);
+    const gasttore = Number(gast);
+
+    if (Number.isNaN(heimtore) || Number.isNaN(gasttore)) {
+        alert("❌ Tore müssen Zahlen sein");
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/spiele/${spielId}/ergebnis`, {
+            method: "PATCH",
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                heimtore,
+                gasttore
+            })
+        });
+
+        console.log("📡 Response Status:", res.status);
+
+        const text = await res.text();
+        console.log("📡 Response Body:", text);
+
+        if (!res.ok) {
+            throw new Error(text || "Fehler beim Speichern");
+        }
+
+        alert("✅ Ergebnis gespeichert");
+        ladeSpiele();
+
+    } catch (err) {
+        console.error("❌ Ergebnis speichern fehlgeschlagen:", err);
+        alert("❌ Fehler beim Speichern");
+    }
 }
+
 
 /// ===============================
 // Benutzerverwaltung
@@ -315,4 +358,20 @@ async function userAnlegen(e) {
 
     $("userForm").reset();
     ladeUser();
+}
+async function ladeRangliste() {
+    const daten = await api("/api/rangliste");
+
+    const tbody = $("ranglisteBody");
+    tbody.innerHTML = "";
+
+    daten.forEach((u, i) => {
+        tbody.innerHTML += `
+            <tr>
+                <td>${i + 1}</td>
+                <td>${u.name}</td>
+                <td>${u.punkte}</td>
+            </tr>
+        `;
+    });
 }

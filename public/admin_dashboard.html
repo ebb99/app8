@@ -52,11 +52,20 @@
 
         <hr>
 
-        <select id="spieleSelect"></select>
+    <section>
+    <h2>Spiele auswerten</h2>
 
-        <input type="number" id="heimToreInput" placeholder="Heimtore">
-        <input type="number" id="gastToreInput" placeholder="Gasttore">
-        <button id="updateSpiel">Spiel aktualisieren</button>   
+    <select id="spieleSelect"></select>
+
+    <div style="display:flex; gap:8px; margin-top:10px">
+        <input type="number" id="heimtoreInput" placeholder="Heimtore" min="0">
+        <input type="number" id="gasttoreInput" placeholder="Gasttore" min="0">
+    </div>
+
+    <button id="saveErgebnis">Ergebnis speichern & auswerten</button>
+</section>
+        
+
         <button id="deleteSpiel">Spiel löschen</button>
         
 <h2>Benutzerverwaltung</h2>
