@@ -353,44 +353,112 @@ app.post("/api/spiele", requireAdmin, async (req, res) => {
     }
 });
 
-app.patch("/api/spiele/:id/ergebnis", requireAdmin, async (req, res) => {
+app.patch("/api/spiele/:id/auswerten", requireAdmin, async (req, res) => {
     const { heimtore, gasttore } = req.body;
     const spielId = req.params.id;
 
+    const client = await pool.connect();
+
     try {
-        const result = await pool.query(
-            `
+        await client.query("BEGIN");
+
+        // 1️⃣ Spiel aktualisieren
+        const spielRes = await client.query(`
             UPDATE spiele
             SET heimtore = $1,
                 gasttore = $2,
                 statuswort = 'ausgewertet'
             WHERE id = $3
             RETURNING *
-            `,
-            [heimtore, gasttore, spielId]
+        `, [heimtore, gasttore, spielId]);
+
+        if (spielRes.rowCount === 0) {
+            throw new Error("Spiel nicht gefunden");
+        }
+
+        // 2️⃣ Alte Punkte löschen (wichtig für Korrektur!)
+        await client.query(`
+            UPDATE tips
+            SET punkte = 0
+            WHERE spiel_id = $1
+        `, [spielId]);
+
+        // 3️⃣ Tipps laden
+        const tipsRes = await client.query(`
+            SELECT id, heimtipp, gasttipp
+            FROM tips
+            WHERE spiel_id = $1
+        `, [spielId]);
+
+        // 4️⃣ Punkte berechnen
+        for (const t of tipsRes.rows) {
+            let punkte = 0;
+
+            const richtigesErgebnis =
+                t.heimtipp === heimtore &&
+                t.gasttipp === gasttore;
+
+            const richtigeTendenz =
+                Math.sign(t.heimtipp - t.gasttipp) ===
+                Math.sign(heimtore - gasttore);
+
+            if (richtigesErgebnis) punkte = 3;
+            else if (richtigeTendenz) punkte = 1;
+
+            await client.query(`
+                UPDATE tips
+                SET punkte = $1
+                WHERE id = $2
+            `, [punkte, t.id]);
+        }
+
+        await client.query("COMMIT");
+
+        res.json({
+            message: "Ergebnis gespeichert & Punkte neu berechnet",
+            spiel: spielRes.rows[0]
+        });
+
+    } catch (err) {
+        await client.query("ROLLBACK");
+        console.error("❌ Auswertung Fehler:", err);
+        res.status(500).json({ error: "Auswertung fehlgeschlagen" });
+    } finally {
+        client.release();
+    }
+});
+
+// ===============================
+// Spiel löschen (ADMIN)
+// ===============================
+app.delete("/api/spiele/:id", requireAdmin, async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        // 1️⃣ Tipps zum Spiel löschen (wichtig wegen FK!)
+        await pool.query(
+            "DELETE FROM tips WHERE spiel_id = $1",
+            [id]
+        );
+
+        // 2️⃣ Spiel löschen
+        const result = await pool.query(
+            "DELETE FROM spiele WHERE id = $1 RETURNING id",
+            [id]
         );
 
         if (result.rowCount === 0) {
             return res.status(404).json({ error: "Spiel nicht gefunden" });
         }
 
-        res.json(result.rows[0]);
+        res.json({ ok: true, id });
 
     } catch (err) {
-        console.error("❌ Ergebnis-Update Fehler:", err);
-        res.status(500).json({ error: "Ergebnis speichern fehlgeschlagen" });
+        console.error("Spiel löschen Fehler:", err);
+        res.status(500).json({ error: "Spiel konnte nicht gelöscht werden" });
     }
 });
 
-
-app.delete("/api/spiele/:id", requireAdmin, async (req, res) => {
-    await pool.query("DELETE FROM spiele WHERE id=$1", [req.params.id]);
-    res.json({ success: true });
-});
-
-// ===============================
-// Tipps API
-// ===============================
 app.post("/api/tips", requireLogin, requireTipper, async (req, res) => {
     const { spiel_id, heimtipp, gasttipp } = req.body;
 

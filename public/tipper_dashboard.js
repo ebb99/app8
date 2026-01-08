@@ -52,11 +52,43 @@ async function ladeSpiele() {
     spiele
         .filter(s => s.statuswort === "geplant")
         .forEach(s => {
-            const text = `${new Date(s.anstoss).toLocaleString("de-DE")}
+        const text = `${new Date(s.anstoss).toLocaleString("de-DE", {
+    dateStyle: "short",
+    timeStyle: "short"
+})}
+
+
+
 ${s.heimverein} – ${s.gastverein}`;
             $("spieleSelect").appendChild(new Option(text, s.id));
         });
 }
+
+/*
+async function ladeSpiele() {
+    const spiele = await api("/api/spiele");
+    $("spieleSelect").innerHTML = "";
+
+    spiele.forEach(s => {
+        const text = `${new Date(s.anstoss).toLocaleString("de-DE", {
+    dateStyle: "short",
+    timeStyle: "short"
+})}
+        
+        ${s.heimverein} : ${s.gastverein}
+        ${s.heimtore}:${s.gasttore} (${s.statuswort})`;
+
+        $("spieleSelect").appendChild(new Option(text, s.id));
+    });
+}
+*/
+
+
+
+
+
+
+
 
 // ===============================
 // Tipp speichern

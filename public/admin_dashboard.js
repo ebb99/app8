@@ -39,8 +39,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     $("saveSpiel")?.addEventListener("click", spielSpeichern);
     $("deleteSpiel")?.addEventListener("click", spielLoeschen);
-    $("saveErgebnis")?.addEventListener("click", ergebnisSpeichern);
-
+    $("saveErgebnis")?.addEventListener("click", ergebnisSpeichernUndAuswerten);
+    
     $("userForm")?.addEventListener("submit", userAnlegen);
 });
 
@@ -93,7 +93,17 @@ async function ladeZeiten() {
         select2.innerHTML = "";
 
         zeiten.forEach(z => {
-            const text = new Date(z.zeit).toLocaleString("de-DE");
+            //const text = new Date(z.zeit).toLocaleString("de-DE");
+           // const text = new Date(z.zeit);
+
+const text = `${new Date(z.zeit).toLocaleString("de-DE", {
+    dateStyle: "short",
+    timeStyle: "short"
+})}`;
+
+
+
+
             select1.appendChild(new Option(text, z.id));
             select2.appendChild(new Option(text, z.id));
         });
@@ -121,7 +131,8 @@ async function zeitSpeichern() {
 
     await api("/api/zeiten", {
         method: "POST",
-        body: JSON.stringify({ zeit: new Date(v).toISOString() })
+        body: JSON.stringify({ zeit: v })
+        
     });
 
     $("zeitInput").value = "";
@@ -180,7 +191,11 @@ async function ladeSpiele() {
     $("spieleSelect").innerHTML = "";
 
     spiele.forEach(s => {
-        const text = `${new Date(s.anstoss).toLocaleString("de-DE")}
+        const text = `${new Date(s.anstoss).toLocaleString("de-DE", {
+    dateStyle: "short",
+    timeStyle: "short"
+})}
+        
         ${s.heimverein} : ${s.gastverein}
         ${s.heimtore}:${s.gasttore} (${s.statuswort})`;
 
@@ -223,63 +238,28 @@ async function spielLoeschen() {
     ladeSpiele();
 }
 
-async function ergebnisSpeichern() {
-    console.log("🟡 ergebnisSpeichern()");
+async function ergebnisSpeichernUndAuswerten() {
+    const id = $("spieleSelect").value;
+    if (!id) return alert("Spiel wählen");
 
-    const spielId = document.getElementById("spieleSelect")?.value;
-    const heim = document.getElementById("heimtoreInput")?.value;
-    const gast = document.getElementById("gasttoreInput")?.value;
-
-    console.log("📤 Werte:", { spielId, heim, gast });
-
-    if (!spielId) {
-        alert("❌ Kein Spiel gewählt");
-        return;
-    }
-
-    if (heim === "" || gast === "") {
-        alert("❌ Tore fehlen");
-        return;
-    }
-
-    const heimtore = Number(heim);
-    const gasttore = Number(gast);
-
-    if (Number.isNaN(heimtore) || Number.isNaN(gasttore)) {
-        alert("❌ Tore müssen Zahlen sein");
-        return;
-    }
+    const heimtore = Number($("heimtoreInput").value);
+    const gasttore = Number($("gasttoreInput").value);
 
     try {
-        const res = await fetch(`/api/spiele/${spielId}/ergebnis`, {
+        const res = await api(`/api/spiele/${id}/auswerten`, {
             method: "PATCH",
-            credentials: "include",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                heimtore,
-                gasttore
-            })
+            body: JSON.stringify({ heimtore, gasttore })
         });
 
-        console.log("📡 Response Status:", res.status);
-
-        const text = await res.text();
-        console.log("📡 Response Body:", text);
-
-        if (!res.ok) {
-            throw new Error(text || "Fehler beim Speichern");
-        }
-
-        alert("✅ Ergebnis gespeichert");
+        alert("✅ Ergebnis gespeichert & Punkte berechnet");
         ladeSpiele();
 
     } catch (err) {
-        console.error("❌ Ergebnis speichern fehlgeschlagen:", err);
-        alert("❌ Fehler beim Speichern");
+        alert("❌ Fehler bei der Auswertung");
+        console.error(err);
     }
 }
+
 
 
 /// ===============================
